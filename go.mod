@@ -2,9 +2,9 @@ module github.com/nitrictech/nitric-provider-template/custom-provider
 
 go 1.24.7
 
-replace github.com/nitrictech/nitric/core => ../nitric/core
+replace github.com/nitrictech/nitric/core => /home/viperarossa/poli/thesis/nitric/core
 
-replace github.com/nitrictech/nitric/cloud/common => ../nitric/cloud/common
+replace github.com/nitrictech/nitric/cloud/common => /home/viperarossa/poli/thesis/nitric/cloud/common
 
 require (
 	github.com/docker/docker v25.0.6+incompatible
@@ -13,9 +13,11 @@ require (
 	github.com/nitrictech/nitric/core v0.0.0-20250107045554-1b4369fca6ce
 	github.com/pkg/errors v0.9.1
 	github.com/pulumi/pulumi-command/sdk v1.2.0
+	github.com/pulumi/pulumi-docker/sdk/v3 v3.6.1
 	github.com/pulumi/pulumi-docker/sdk/v4 v4.10.0
 	github.com/pulumi/pulumi/sdk/v3 v3.214.0
 	github.com/redis/go-redis/v9 v9.18.0
+	github.com/segmentio/kafka-go v0.4.50
 	golang.org/x/exp v0.0.0-20250106191152-7588d65b2ba8
 	google.golang.org/grpc v1.78.0
 	google.golang.org/protobuf v1.36.11
@@ -23,6 +25,7 @@ require (
 
 require (
 	dario.cat/mergo v1.0.1 // indirect
+	github.com/Masterminds/semver v1.5.0 // indirect
 	github.com/Masterminds/semver/v3 v3.3.1 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/ProtonMail/go-crypto v1.1.3 // indirect
@@ -89,6 +92,7 @@ require (
 	github.com/opentracing/basictracer-go v1.1.0 // indirect
 	github.com/opentracing/opentracing-go v1.2.0 // indirect
 	github.com/pgavlin/fx v0.1.6 // indirect
+	github.com/pierrec/lz4/v4 v4.1.15 // indirect
 	github.com/pjbgf/sha1cd v0.3.2 // indirect
 	github.com/pkg/term v1.1.0 // indirect
 	github.com/pulumi/appdash v0.0.0-20231130102222-75f619a67231 // indirect

@@ -102,6 +102,11 @@ func (a *NitricCustomPulumiProvider) Pre(ctx *pulumi.Context, resources []*pulum
     })
     if err != nil { return err }
 
+    if a.DockerProviders == nil {
+        a.DockerProviders = make(map[int]*docker.Provider)
+    }
+    a.DockerProviders[0] = masterDockerProv
+
     // This assigns the actual Pulumi resource to the struct to prevent the nil panic
     a.network, err = docker.NewNetwork(ctx, "nitric-net", &docker.NetworkArgs{
         Name:   pulumi.String("nitric-net"),

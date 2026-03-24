@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
-	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -18,8 +16,8 @@ import (
 )
 
 type InterpreterPayload struct {
-	Table        string                     `json:"table"`
-	Instructions []*sparkpb.SparkInstruction `json:"instructions"`
+    TopicName    string                      `json:"topic_name"`
+    Instructions []*sparkpb.SparkInstruction `json:"instructions"`
 }
 
 type SparkServer struct {
@@ -31,7 +29,7 @@ func New() (*SparkServer, error) {
 }
 
 func (s *SparkServer) Execute(ctx context.Context, req *sparkpb.SparkExecuteRequest) (*sparkpb.SparkExecuteResponse, error) {
-	log.Printf("[Spark Runtime] Execute: %s (Pattern: %s)", req.GetClusterName(), req.GetTablePattern())
+	log.Printf("[Spark Runtime] launching stream spark: %s ", req.GetClusterName())
 
 	log.Printf("[DEBUG-GO] Instructions from Request: %+v", req.GetInstructions())
 
@@ -42,47 +40,41 @@ func (s *SparkServer) Execute(ctx context.Context, req *sparkpb.SparkExecuteRequ
 	defer cli.Close()
 
 	payload := InterpreterPayload{
-		Table:        req.GetTablePattern(),
+		TopicName:    req.GetTablePattern(), 
 		Instructions: req.GetInstructions(),
 	}
+
 	jsonData, _ := json.Marshal(payload)
 	cleanJson := strings.ReplaceAll(string(jsonData), "\n", "")
 
+	log.Printf("[DEBUG-GO] Submitting Spark Job for Topic: %s", req.GetTablePattern())
 	log.Printf("[DEBUG-GO] Marshaled JSON Payload: %s", string(cleanJson))
 
-	masterUrl := "spark://192.168.1.133:7077"
-	driverHost := "192.168.1.133" 
-	redisHost := "192.168.1.133"
-	jarPath := "/opt/spark/jars/spark-redis_2.12-3.1.0.jar,/opt/spark/jars/jedis-3.9.0.jar,/opt/spark/jars/commons-pool2-2.11.1.jar"
-
+	masterUrl := "spark://192.168.1.23:7077"
+	driverHost := "192.168.1.23" 
+	
 	// Construct the command as a slice
 	cmd := []string{
 		"/opt/spark/bin/spark-submit",
 		"--master", masterUrl,
-		"--jars", jarPath,
+		"--packages", "org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0",
 		"--conf", fmt.Sprintf("spark.driver.host=%s", driverHost),
 		"--conf", "spark.driver.bindAddress=0.0.0.0",
-		"--conf", fmt.Sprintf("spark.redis.host=%s", redisHost),
 		"/opt/spark/scripts/interpreter.py",
-		cleanJson, // No extra quotes needed here if passed as a slice element
+		cleanJson,
 	}
 
 	log.Printf("[Spark Runtime] Submitting to spark-master container...")
-	output, err := s.runExec(ctx, cli, "spark-master", cmd)
-	if err != nil {
-		log.Printf("[Spark Runtime] Job Failed: %v", err)
-		return &sparkpb.SparkExecuteResponse{Value: 0, Error: err.Error()}, nil
-	}
+	go func() {
+		output, err := s.runExec(context.Background(), cli, "spark-master", cmd)
+		if err != nil {
+			log.Printf("[Spark Runtime] Stream Job exited/failed: %v", err)
+		}
+		log.Printf("[Spark Runtime] Stream Output: %s", output)
+	}()
+	
 
-	re := regexp.MustCompile(`RESULT_START:([\d.]+):RESULT_END`)
-	matches := re.FindStringSubmatch(output)
-	if len(matches) > 1 {
-		val, _ := strconv.ParseFloat(matches[1], 64)
-		log.Printf("[Spark Runtime] Success. Result: %f", val)
-		return &sparkpb.SparkExecuteResponse{Value: val}, nil
-	}
-
-	return &sparkpb.SparkExecuteResponse{Value: 0, Error: "Missing result markers in output"}, nil
+	return &sparkpb.SparkExecuteResponse{Value: 1.0, Error: ""}, nil
 }
 
 func (s *SparkServer) runExec(ctx context.Context, cli *client.Client, containerName string, cmd []string) (string, error) {

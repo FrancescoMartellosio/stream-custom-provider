@@ -1,108 +1,113 @@
 import sys
 import json
+import os
 import logging
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, sum
+from pyspark.sql.functions import col, get_json_object, upper, sum as spark_sum, struct, to_json
 
-# Setup logging
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("SparkInterpreter")
+logger = logging.getLogger("KafkaInterpreter")
 
 def main():
+    # 1. Parse Input
     if len(sys.argv) < 2:
-        logger.error("No instruction JSON provided")
         return
 
     try:
-        instruction = json.loads(sys.argv[1])
-        table_pattern = instruction.get('table') 
-        if not table_pattern:
-            print("ERROR: No table pattern provided in instruction")
-            sys.exit(1)
-        commands = instruction.get('instructions', [])
+        instructions = json.loads(sys.argv[1])
+        topic_name = instructions.get('topic_name')
+        commands = instructions.get('instructions', [])
     except Exception as e:
-        logger.error(f"Failed to parse JSON: {e}")
+        logger.error(f"JSON Parse Failure: {e}")
         return
 
-    spark = SparkSession.builder.appName(f"GoQuery_{table_pattern}").getOrCreate()
+    # 2. Setup Spark
+    spark = SparkSession.builder.appName(f"Nitric-Scanner-{topic_name}").getOrCreate()
+    spark.sparkContext.setLogLevel("WARN")
 
-    try:
-        # 1. Load data from Redis
-        df = spark.read \
-            .format("org.apache.spark.sql.redis") \
-            .option("keys.pattern", table_pattern) \
-            .option("infer.schema", "true") \
-            .load()
+    kafka_host = os.getenv("STREAM_SOURCE_HOST", "192.168.1.23")
+    kafka_bootstrap = f"{kafka_host}:9092"
 
-        final_result = 0.0
+    # 3. Read Stream
+    raw_stream = spark.readStream \
+        .format("kafka") \
+        .option("kafka.bootstrap.servers", kafka_bootstrap) \
+        .option("subscribe", topic_name) \
+        .option("startingOffsets", "latest") \
+        .load()
 
-        # 2. Iterate through the instructions list in order
-        for cmd in commands:
-            cmd_type = cmd.get('type')
+    # We keep 'json_payload' but we will build real columns alongside it
+    df = raw_stream.selectExpr("CAST(value AS STRING) as json_payload")
+    
+    # 4. Concatenated Instruction Loop
+    has_sum = False
+    sum_column = ""
 
-            if cmd_type == "FILTER":
-                column = cmd.get('column')
-                operator = cmd.get('operator')
-                value = cmd.get('value')
+    for cmd in commands:
+        cmd_type = cmd.get("type", "").upper()
+        column = cmd.get("column")
+        operator = cmd.get("operator")
+        value = cmd.get("value")
 
-                logger.info(f"Applying Filter: {column} {operator} {value}")
+        # CRITICAL: If the column isn't in our DF yet, extract it from JSON.
+        # If it IS already there (from a previous MAP), we use the existing one.
+        if column and column not in df.columns:
+            df = df.withColumn(column, get_json_object(col("json_payload"), f"$.{column}"))
 
-                if operator == "eq":
-                    df = df.filter(df[column] == value)
-                elif operator == "neq": 
-                    df = df.filter(df[column] != value)
-                elif operator == "gt":
-                    df = df.filter(df[column].cast("double") > float(value))
-                elif operator == "lt":
-                    df = df.filter(df[column].cast("double") < float(value))
-                elif operator == "gte": 
-                    df = df.filter(df[column].cast("double") >= float(value))
-                elif operator == "lte": 
-                    df = df.filter(df[column].cast("double") <= float(value))
-                    
-            elif cmd_type == "MAP":
-                column = cmd.get('column')
-                map_type = cmd.get('operator') # Changed variable name for clarity
-                val = cmd.get('value')
+        if cmd_type == "FILTER":
+            logger.info(f"Chain-Filter: {column} {operator} {value}")
+            if operator == "eq":
+                df = df.filter(col(column) == value)
+            elif operator == "neq":
+                df = df.filter(col(column) != value)
+            elif operator == "gt":
+                df = df.filter(col(column).cast("double") > float(value))
+            elif operator == "lt":
+                df = df.filter(col(column).cast("double") < float(value))
+            elif operator == "gte":
+                df = df.filter(col(column).cast("double") >= float(value))
+            elif operator == "lte":
+                df = df.filter(col(column).cast("double") <= float(value))
 
-                logger.info(f"Applying Map Operation: {map_type} on column {column}")
+        elif cmd_type == "MAP":
+            logger.info(f"Chain-Map: {column} -> {operator}")
+            if operator == "MULTIPLY":
+                df = df.withColumn(column, col(column).cast("double") * float(value))
+            elif operator == "ADD":
+                df = df.withColumn(column, col(column).cast("double") + float(value))
+            elif operator == "UPPERCASE":
+                df = df.withColumn(column, upper(col(column)))
 
-                if map_type == "MULTIPLY":
-                    df = df.withColumn(column, col(column).cast("double") * float(val))
-                elif map_type == "ADD":
-                    df = df.withColumn(column, col(column).cast("double") + float(val))
-                elif map_type == "UPPERCASE":
-                    from pyspark.sql.functions import upper
-                    df = df.withColumn(column, upper(col(column)))
+        elif cmd_type == "SUM": 
+            has_sum = True
+            sum_column = column
 
-            elif cmd_type == "SUM":
-                column = cmd.get('column')
-                logger.info(f"Applying Sum on: {column}")
-                res = df.select(sum(col(column).cast("double"))).collect()[0][0]
-                final_result = res if res is not None else 0.0
+    # 5. Sink Configuration
+    if has_sum:
+        # Aggregate the column (after all previous MAPs/FILTERs)
+        output_df = df.select(spark_sum(col(sum_column).cast("double")).alias("running_total"))
+        kafka_output_df = output_df.selectExpr("CAST(running_total AS STRING) AS value")
+        output_mode = "complete"
+    else:
+        # Final output includes all transformed columns
+        # We drop the raw json_payload so the output is clean JSON of the results
+        final_df = df.drop("json_payload")
+        kafka_output_df = final_df.select(to_json(struct("*")).alias("value"))
+        output_mode = "append"
 
-            elif cmd_type == "SAVE":
-                target_table = cmd.get('value')
-                logger.info(f"Saving filtered results to table: {target_table}")
-                
-                # Overwrite mode ensures the table is cleared before writing new data
-                df.write \
-                    .format("org.apache.spark.sql.redis") \
-                    .option("table", target_table) \
-                    .mode("overwrite") \
-                    .save()
-                
-                # Return the count of records saved as the result
-                final_result = float(df.count())
+    # 6. Start Stream
+    target_topic = next((c.get('value') for c in commands if c.get('type').upper() == "SAVE"), f"{topic_name}-results")
+    checkpoint_path = f"/tmp/checkpoints/{topic_name}_{target_topic}"
 
-        # 3. Final Output for Go SDK
-        print(f"RESULT_START:{final_result}:RESULT_END")
+    query = kafka_output_df.writeStream \
+        .format("kafka") \
+        .option("kafka.bootstrap.servers", kafka_bootstrap) \
+        .option("topic", target_topic) \
+        .option("checkpointLocation", checkpoint_path) \
+        .outputMode(output_mode) \
+        .start()
 
-    except Exception as e:
-        logger.error(f"Execution failed: {e}")
-        print(f"RESULT_START:0.0:RESULT_END") 
-    finally:
-        spark.stop()
+    query.awaitTermination()
 
 if __name__ == "__main__":
     main()
