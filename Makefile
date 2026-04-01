@@ -5,7 +5,7 @@ NAME := custom
 
 # This is the local development version number, we recommend 0.0.1.
 # This will only be used to install the extension locally for testing.
-DEV_VERSION := 0.0.1
+DEV_VERSION := 0.0.2
 
 # === Don't modify below this line, unless you know what you're doing ===
 FQN := ${NAMESPACE}/${NAME}

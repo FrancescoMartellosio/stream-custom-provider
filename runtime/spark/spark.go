@@ -3,22 +3,16 @@ package spark
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"google.golang.org/protobuf/encoding/protojson"
 	"fmt"
 	"log"
 	"strings"
-	"time"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
 	sparkpb "github.com/nitrictech/nitric/core/pkg/proto/spark/v1"
 )
-
-type InterpreterPayload struct {
-    TopicName    string                      `json:"topic_name"`
-    Instructions []*sparkpb.SparkInstruction `json:"instructions"`
-}
 
 type SparkServer struct {
 	sparkpb.UnimplementedSparkServer
@@ -39,19 +33,19 @@ func (s *SparkServer) Execute(ctx context.Context, req *sparkpb.SparkExecuteRequ
 	}
 	defer cli.Close()
 
-	payload := InterpreterPayload{
-		TopicName:    req.GetTablePattern(), 
-		Instructions: req.GetInstructions(),
+	marshaller := protojson.MarshalOptions{
+		UseProtoNames:  true,
+		EmitUnpopulated: false,
 	}
 
-	jsonData, _ := json.Marshal(payload)
+	jsonData, _ := marshaller.Marshal(req)
 	cleanJson := strings.ReplaceAll(string(jsonData), "\n", "")
 
 	log.Printf("[DEBUG-GO] Submitting Spark Job for Topic: %s", req.GetTablePattern())
-	log.Printf("[DEBUG-GO] Marshaled JSON Payload: %s", string(cleanJson))
+	log.Printf("[DEBUG-GO] JSON Payload: %s", string(cleanJson))
 
-	masterUrl := "spark://192.168.1.23:7077"
-	driverHost := "192.168.1.23" 
+	masterUrl := "spark://192.168.1.86:7077"
+	driverHost := "192.168.1.86" 
 	
 	// Construct the command as a slice
 	cmd := []string{
@@ -120,9 +114,3 @@ func (s *SparkServer) runExec(ctx context.Context, cli *client.Client, container
 	return outBuf.String(), nil
 }
 
-func (s *SparkServer) Submit(ctx context.Context, req *sparkpb.SparkSubmitRequest) (*sparkpb.SparkSubmitResponse, error) {
-	return &sparkpb.SparkSubmitResponse{
-		JobId:  fmt.Sprintf("job-%d", time.Now().Unix()),
-		Status: "SUBMITTED",
-	}, nil
-}
