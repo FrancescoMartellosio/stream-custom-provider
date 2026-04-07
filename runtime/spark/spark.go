@@ -44,8 +44,8 @@ func (s *SparkServer) Execute(ctx context.Context, req *sparkpb.SparkExecuteRequ
 	log.Printf("[DEBUG-GO] Submitting Spark Job for Topic: %s", req.GetTablePattern())
 	log.Printf("[DEBUG-GO] JSON Payload: %s", string(cleanJson))
 
-	masterUrl := "spark://192.168.1.86:7077"
-	driverHost := "192.168.1.86" 
+	masterUrl := "spark://192.168.1.139:7077"
+	driverHost := "192.168.1.139" 
 	
 	// Construct the command as a slice
 	cmd := []string{
